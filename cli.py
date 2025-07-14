@@ -17,7 +17,7 @@ def cli(ctx):
     """Chroni - A lightweight local version control system."""
     # Initialize database on first run
     init_database()
-    
+
     # Set up context
     ctx.ensure_object(dict)
     ctx.obj['tracker'] = Tracker()
@@ -34,7 +34,7 @@ def track(ctx, path):
     if not os.path.exists(abs_path):
         click.echo(f"Error: Path '{path}' does not exist.")
         return
-    
+
     tracker = ctx.obj['tracker']
     if tracker.track_path(abs_path):
         click.echo(f"Now tracking: {path}")
@@ -71,11 +71,11 @@ def list(ctx):
     """List tracked files/folders."""
     tracker = ctx.obj['tracker']
     tracked_items = tracker.list_tracked()
-    
+
     if not tracked_items:
         click.echo("No files or folders are currently being tracked.")
         return
-    
+
     click.echo("Currently tracked items:")
     for item in tracked_items:
         click.echo(f"  {item}")
@@ -86,11 +86,11 @@ def scan(ctx):
     """Scan for changes and store diffs."""
     scanner = ctx.obj['scanner']
     changes = scanner.scan_all()
-    
+
     if not changes:
         click.echo("No changes detected.")
         return
-    
+
     click.echo(f"Detected {len(changes)} changes:")
     for change in changes:
         click.echo(f"  {change}")
@@ -103,7 +103,7 @@ def restore(ctx, path, ver):
     """Restore a file to specific version."""
     abs_path = resolve_path(path)
     restorer = ctx.obj['restorer']
-    
+
     if restorer.restore_file(abs_path, ver):
         click.echo(f"Restored {path} to version {ver}")
     else:
@@ -116,7 +116,7 @@ def restore(ctx, path, ver):
 def snapshot_create(ctx, name, note):
     """Create a named snapshot of the current state."""
     snapshot_manager = ctx.obj['snapshot_manager']
-    
+
     if snapshot_manager.create_snapshot(name, note):
         click.echo(f"Created snapshot: {name}")
     else:
@@ -128,11 +128,11 @@ def snapshot_list(ctx):
     """List all snapshots."""
     snapshot_manager = ctx.obj['snapshot_manager']
     snapshots = snapshot_manager.list_snapshots()
-    
+
     if not snapshots:
         click.echo("No snapshots found.")
         return
-    
+
     click.echo("Snapshots:")
     for snapshot in snapshots:
         note_text = f" - {snapshot['note']}" if snapshot['note'] else ""
@@ -144,7 +144,7 @@ def snapshot_list(ctx):
 def snapshot_restore(ctx, name):
     """Restore all files to a snapshot state."""
     snapshot_manager = ctx.obj['snapshot_manager']
-    
+
     if snapshot_manager.restore_snapshot(name):
         click.echo(f"Restored to snapshot: {name}")
     else:
@@ -157,19 +157,19 @@ def snapshot_restore(ctx, name):
 def history(ctx, path, limit):
     """Show full history of a file."""
     from core.history import HistoryViewer
-    
+
     abs_path = resolve_path(path)
     history_viewer = HistoryViewer()
-    
+
     versions = history_viewer.get_file_history(abs_path, limit)
-    
+
     if not versions:
         click.echo(f"No history found for: {path}")
         return
-    
+
     click.echo(f"History for: {path}")
     click.echo("=" * 50)
-    
+
     for version in versions:
         click.echo(f"Version {version['version']} - {version['formatted_timestamp']}")
         if version['diff']:
@@ -188,16 +188,16 @@ def history(ctx, path, limit):
 def show(ctx, path, ver):
     """Show latest version or specific version of a file."""
     from core.history import HistoryViewer
-    
+
     abs_path = resolve_path(path)
     history_viewer = HistoryViewer()
-    
+
     if ver:
         version_info = history_viewer.get_file_version_info(abs_path, ver)
         if not version_info:
             click.echo(f"Version {ver} not found for: {path}")
             return
-        
+
         click.echo(f"File: {path} (Version {ver})")
         click.echo(f"Date: {version_info['formatted_timestamp']}")
         click.echo("=" * 50)
@@ -208,7 +208,7 @@ def show(ctx, path, ver):
         if not latest:
             click.echo(f"No versions found for: {path}")
             return
-        
+
         click.echo(f"File: {path} (Latest - Version {latest['version']})")
         click.echo(f"Date: {latest['formatted_timestamp']}")
         click.echo("=" * 50)
@@ -221,21 +221,31 @@ def show(ctx, path, ver):
 def restore_date(ctx, path, date):
     """Restore a file to the version closest to a specific date."""
     from core.history import HistoryViewer
-    
+
     abs_path = resolve_path(path)
     history_viewer = HistoryViewer()
     restorer = ctx.obj['restorer']
-    
+
     version = history_viewer.find_version_by_date(abs_path, date)
-    
+
     if not version:
         click.echo(f"No version found for date '{date}' for file: {path}")
         return
-    
+
     if restorer.restore_file(abs_path, version['version']):
         click.echo(f"Restored {path} to version {version['version']} from {version['formatted_timestamp']}")
     else:
         click.echo(f"Failed to restore {path}")
+
+@cli.command('watch')
+@click.pass_context
+def watch(ctx):
+    """Watch tracked paths for changes and auto-scan."""
+    from core import watcher
+    tracker = ctx.obj['tracker']
+    paths = tracker.list_tracked()
+    watcher.start_watching(paths)
+    pass
 
 if __name__ == '__main__':
     cli()
