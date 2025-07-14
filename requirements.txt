@@ -1,0 +1,5 @@
+click>=8.0.0
+# sqlite3 is part of Python standard library
+# difflib is part of Python standard library
+# os is part of Python standard library
+# datetime is part of Python standard library

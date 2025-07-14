@@ -1,0 +1,1 @@
+"""Core functionality for Chroni version control system."""

@@ -1,0 +1,1061 @@
+#!/usr/bin/env python3
+"""
+Chroni - A lightweight local version control system for tracking and snapshotting text files.
+
+This is a multi-file Python application. To use it, create the following directory structure:
+
+chroni/
+├── __main__.py           # CLI entry point
+├── cli.py                # Click commands
+├── core/
+│   ├── __init__.py
+│   ├── tracker.py
+│   ├── scanner.py
+│   ├── restore.py
+│   ├── snapshot.py
+├── db/
+│   ├── __init__.py
+│   ├── schema.py
+│   ├── access.py
+├── storage/
+│   ├── __init__.py
+│   ├── files.py
+│   ├── diffs.py
+├── utils/
+│   ├── __init__.py
+│   ├── paths.py
+│   ├── time.py
+├── requirements.txt
+└── README.md
+"""
+
+# File: __main__.py
+"""
+Entry point for the Chroni version control system.
+Usage: python -m chroni <command> [options]
+"""
+
+from cli import cli
+
+if __name__ == '__main__':
+    cli()
+
+# File: cli.py
+"""
+Click-based CLI commands for Chroni version control system.
+"""
+
+import click
+import os
+from core.tracker import Tracker
+from core.scanner import Scanner
+from core.restore import Restorer
+from core.snapshot import SnapshotManager
+from db.schema import init_database
+from utils.paths import resolve_path
+
+@click.group()
+@click.pass_context
+def cli(ctx):
+    """Chroni - A lightweight local version control system."""
+    # Initialize database on first run
+    init_database()
+    
+    # Set up context
+    ctx.ensure_object(dict)
+    ctx.obj['tracker'] = Tracker()
+    ctx.obj['scanner'] = Scanner()
+    ctx.obj['restorer'] = Restorer()
+    ctx.obj['snapshot_manager'] = SnapshotManager()
+
+@cli.command()
+@click.argument('path')
+@click.pass_context
+def track(ctx, path):
+    """Start tracking file or folder."""
+    abs_path = resolve_path(path)
+    if not os.path.exists(abs_path):
+        click.echo(f"Error: Path '{path}' does not exist.")
+        return
+    
+    tracker = ctx.obj['tracker']
+    if tracker.track_path(abs_path):
+        click.echo(f"Now tracking: {path}")
+    else:
+        click.echo(f"Already tracking: {path}")
+
+@cli.command()
+@click.argument('path')
+@click.pass_context
+def untrack(ctx, path):
+    """Stop tracking, but keep history."""
+    abs_path = resolve_path(path)
+    tracker = ctx.obj['tracker']
+    if tracker.untrack_path(abs_path):
+        click.echo(f"Stopped tracking: {path}")
+    else:
+        click.echo(f"Not currently tracking: {path}")
+
+@cli.command()
+@click.argument('path')
+@click.pass_context
+def forget(ctx, path):
+    """Remove all history of path."""
+    abs_path = resolve_path(path)
+    tracker = ctx.obj['tracker']
+    if tracker.forget_path(abs_path):
+        click.echo(f"Removed all history for: {path}")
+    else:
+        click.echo(f"No history found for: {path}")
+
+@cli.command()
+@click.pass_context
+def list(ctx):
+    """List tracked files/folders."""
+    tracker = ctx.obj['tracker']
+    tracked_items = tracker.list_tracked()
+    
+    if not tracked_items:
+        click.echo("No files or folders are currently being tracked.")
+        return
+    
+    click.echo("Currently tracked items:")
+    for item in tracked_items:
+        click.echo(f"  {item}")
+
+@cli.command()
+@click.pass_context
+def scan(ctx):
+    """Scan for changes and store diffs."""
+    scanner = ctx.obj['scanner']
+    changes = scanner.scan_all()
+    
+    if not changes:
+        click.echo("No changes detected.")
+        return
+    
+    click.echo(f"Detected {len(changes)} changes:")
+    for change in changes:
+        click.echo(f"  {change}")
+
+@cli.command()
+@click.argument('path')
+@click.option('--ver', type=int, required=True, help='Version number to restore')
+@click.pass_context
+def restore(ctx, path, ver):
+    """Restore a file to specific version."""
+    abs_path = resolve_path(path)
+    restorer = ctx.obj['restorer']
+    
+    if restorer.restore_file(abs_path, ver):
+        click.echo(f"Restored {path} to version {ver}")
+    else:
+        click.echo(f"Failed to restore {path} to version {ver}")
+
+@cli.command('snapshot-create')
+@click.argument('name')
+@click.option('--note', help='Optional note for the snapshot')
+@click.pass_context
+def snapshot_create(ctx, name, note):
+    """Create a named snapshot of the current state."""
+    snapshot_manager = ctx.obj['snapshot_manager']
+    
+    if snapshot_manager.create_snapshot(name, note):
+        click.echo(f"Created snapshot: {name}")
+    else:
+        click.echo(f"Failed to create snapshot: {name}")
+
+@cli.command('snapshot-list')
+@click.pass_context
+def snapshot_list(ctx):
+    """List all snapshots."""
+    snapshot_manager = ctx.obj['snapshot_manager']
+    snapshots = snapshot_manager.list_snapshots()
+    
+    if not snapshots:
+        click.echo("No snapshots found.")
+        return
+    
+    click.echo("Snapshots:")
+    for snapshot in snapshots:
+        note_text = f" - {snapshot['note']}" if snapshot['note'] else ""
+        click.echo(f"  {snapshot['name']} ({snapshot['timestamp']}){note_text}")
+
+@cli.command('snapshot-restore')
+@click.argument('name')
+@click.pass_context
+def snapshot_restore(ctx, name):
+    """Restore all files to a snapshot state."""
+    snapshot_manager = ctx.obj['snapshot_manager']
+    
+    if snapshot_manager.restore_snapshot(name):
+        click.echo(f"Restored to snapshot: {name}")
+    else:
+        click.echo(f"Failed to restore snapshot: {name}")
+
+if __name__ == '__main__':
+    cli()
+
+# File: core/__init__.py
+"""Core functionality for Chroni version control system."""
+
+# File: core/tracker.py
+"""
+File and folder tracking functionality.
+"""
+
+import os
+from db.access import DatabaseAccess
+from utils.paths import get_text_files_in_directory
+
+class Tracker:
+    def __init__(self):
+        self.db = DatabaseAccess()
+    
+    def track_path(self, path):
+        """
+        Start tracking a file or folder.
+        Returns True if newly tracked, False if already tracked.
+        """
+        if self.is_tracked(path):
+            return False
+        
+        self.db.add_tracked_item(path)
+        
+        # If it's a directory, track all text files in it
+        if os.path.isdir(path):
+            text_files = get_text_files_in_directory(path)
+            for file_path in text_files:
+                if not self.is_tracked(file_path):
+                    self.db.add_tracked_item(file_path)
+        
+        return True
+    
+    def untrack_path(self, path):
+        """
+        Stop tracking a path but keep its history.
+        Returns True if was tracked, False if not.
+        """
+        if not self.is_tracked(path):
+            return False
+        
+        self.db.deactivate_tracked_item(path)
+        
+        # If it's a directory, untrack all files in it
+        if os.path.isdir(path):
+            text_files = get_text_files_in_directory(path)
+            for file_path in text_files:
+                if self.is_tracked(file_path):
+                    self.db.deactivate_tracked_item(file_path)
+        
+        return True
+    
+    def forget_path(self, path):
+        """
+        Remove all history of a path.
+        Returns True if had history, False if not.
+        """
+        if not self.db.path_exists_in_history(path):
+            return False
+        
+        self.db.remove_all_history(path)
+        
+        # If it's a directory, forget all files in it
+        if os.path.isdir(path):
+            text_files = get_text_files_in_directory(path)
+            for file_path in text_files:
+                if self.db.path_exists_in_history(file_path):
+                    self.db.remove_all_history(file_path)
+        
+        return True
+    
+    def is_tracked(self, path):
+        """Check if a path is currently being tracked."""
+        return self.db.is_tracked(path)
+    
+    def list_tracked(self):
+        """Get list of all currently tracked paths."""
+        return self.db.get_tracked_items()
+
+# File: core/scanner.py
+"""
+File scanning and change detection functionality.
+"""
+
+import os
+from db.access import DatabaseAccess
+from storage.files import FileStorage
+from storage.diffs import DiffStorage
+from utils.time import get_timestamp
+
+class Scanner:
+    def __init__(self):
+        self.db = DatabaseAccess()
+        self.file_storage = FileStorage()
+        self.diff_storage = DiffStorage()
+    
+    def scan_all(self):
+        """
+        Scan all tracked files for changes.
+        Returns list of changed files.
+        """
+        tracked_items = self.db.get_tracked_items()
+        changes = []
+        
+        for path in tracked_items:
+            if os.path.isfile(path):
+                if self._scan_file(path):
+                    changes.append(path)
+            elif os.path.isdir(path):
+                # Scan all files in directory
+                from utils.paths import get_text_files_in_directory
+                text_files = get_text_files_in_directory(path)
+                for file_path in text_files:
+                    if self.db.is_tracked(file_path) and self._scan_file(file_path):
+                        changes.append(file_path)
+        
+        return changes
+    
+    def _scan_file(self, file_path):
+        """
+        Scan a single file for changes.
+        Returns True if changes were detected and stored.
+        """
+        if not os.path.exists(file_path):
+            return False
+        
+        try:
+            current_content = self.file_storage.read_file(file_path)
+        except Exception:
+            return False
+        
+        # Get the latest version
+        latest_version = self.db.get_latest_version(file_path)
+        
+        if latest_version is None:
+            # First time tracking this file
+            self._store_initial_version(file_path, current_content)
+            return True
+        
+        # Check if content has changed
+        if current_content != latest_version['content']:
+            self._store_new_version(file_path, current_content, latest_version)
+            return True
+        
+        return False
+    
+    def _store_initial_version(self, file_path, content):
+        """Store the initial version of a file."""
+        version = 1
+        timestamp = get_timestamp()
+        
+        self.db.add_file_version(
+            path=file_path,
+            version=version,
+            diff=None,
+            content=content,
+            timestamp=timestamp
+        )
+    
+    def _store_new_version(self, file_path, new_content, previous_version):
+        """Store a new version of a file with diff."""
+        version = previous_version['version'] + 1
+        timestamp = get_timestamp()
+        
+        # Create diff
+        diff = self.diff_storage.create_diff(
+            previous_version['content'],
+            new_content
+        )
+        
+        self.db.add_file_version(
+            path=file_path,
+            version=version,
+            diff=diff,
+            content=new_content,
+            timestamp=timestamp
+        )
+
+# File: core/restore.py
+"""
+File restoration functionality.
+"""
+
+import os
+from db.access import DatabaseAccess
+from storage.files import FileStorage
+from storage.diffs import DiffStorage
+
+class Restorer:
+    def __init__(self):
+        self.db = DatabaseAccess()
+        self.file_storage = FileStorage()
+        self.diff_storage = DiffStorage()
+    
+    def restore_file(self, file_path, version):
+        """
+        Restore a file to a specific version.
+        Returns True if successful, False otherwise.
+        """
+        file_version = self.db.get_file_version(file_path, version)
+        
+        if file_version is None:
+            return False
+        
+        try:
+            # If this version has full content, use it directly
+            if file_version['content']:
+                content = file_version['content']
+            else:
+                # Reconstruct content from diffs
+                content = self._reconstruct_content(file_path, version)
+            
+            # Write the content to the file
+            self.file_storage.write_file(file_path, content)
+            return True
+        
+        except Exception:
+            return False
+    
+    def _reconstruct_content(self, file_path, target_version):
+        """
+        Reconstruct file content for a specific version using diffs.
+        """
+        # Get all versions up to target version
+        versions = self.db.get_file_versions_up_to(file_path, target_version)
+        
+        if not versions:
+            return ""
+        
+        # Start with the first version (should have full content)
+        content = versions[0]['content']
+        
+        # Apply diffs sequentially
+        for i in range(1, len(versions)):
+            version = versions[i]
+            if version['diff']:
+                content = self.diff_storage.apply_diff(content, version['diff'])
+        
+        return content
+
+# File: core/snapshot.py
+"""
+Snapshot management functionality.
+"""
+
+from db.access import DatabaseAccess
+from core.restore import Restorer
+from utils.time import get_timestamp
+
+class SnapshotManager:
+    def __init__(self):
+        self.db = DatabaseAccess()
+        self.restorer = Restorer()
+    
+    def create_snapshot(self, name, note=None):
+        """
+        Create a named snapshot of the current state.
+        Returns True if successful, False otherwise.
+        """
+        # Check if snapshot name already exists
+        if self.db.snapshot_exists(name):
+            return False
+        
+        # Get current version of all tracked files
+        tracked_items = self.db.get_tracked_items()
+        file_versions = {}
+        
+        for path in tracked_items:
+            if self.db.is_file_tracked(path):
+                latest_version = self.db.get_latest_version(path)
+                if latest_version:
+                    file_versions[path] = latest_version['version']
+        
+        # Create snapshot
+        timestamp = get_timestamp()
+        self.db.create_snapshot(name, note, timestamp)
+        
+        # Store file versions for this snapshot
+        for path, version in file_versions.items():
+            self.db.add_snapshot_file(name, path, version)
+        
+        return True
+    
+    def list_snapshots(self):
+        """Get list of all snapshots."""
+        return self.db.get_all_snapshots()
+    
+    def restore_snapshot(self, name):
+        """
+        Restore all files to a snapshot state.
+        Returns True if successful, False otherwise.
+        """
+        snapshot_files = self.db.get_snapshot_files(name)
+        
+        if not snapshot_files:
+            return False
+        
+        # Restore each file to its snapshot version
+        success = True
+        for file_info in snapshot_files:
+            if not self.restorer.restore_file(file_info['path'], file_info['version']):
+                success = False
+        
+        return success
+
+# File: db/__init__.py
+"""Database functionality for Chroni version control system."""
+
+# File: db/schema.py
+"""
+Database schema initialization and management.
+"""
+
+import os
+import sqlite3
+from utils.paths import get_db_path
+
+def init_database():
+    """Initialize the database with required tables."""
+    db_path = get_db_path()
+    
+    # Create .vcdata directory if it doesn't exist
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Create tables
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tracked_items (
+            path TEXT PRIMARY KEY,
+            active INTEGER DEFAULT 1
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS file_versions (
+            path TEXT,
+            version INTEGER,
+            diff TEXT,
+            content TEXT,
+            timestamp TEXT,
+            PRIMARY KEY (path, version)
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS snapshots (
+            name TEXT PRIMARY KEY,
+            note TEXT,
+            timestamp TEXT
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS snapshot_files (
+            snapshot TEXT,
+            path TEXT,
+            version INTEGER,
+            PRIMARY KEY (snapshot, path),
+            FOREIGN KEY (snapshot) REFERENCES snapshots(name)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# File: db/access.py
+"""
+Database access layer for Chroni version control system.
+"""
+
+import sqlite3
+from utils.paths import get_db_path
+
+class DatabaseAccess:
+    def __init__(self):
+        self.db_path = get_db_path()
+    
+    def _get_connection(self):
+        """Get database connection."""
+        return sqlite3.connect(self.db_path)
+    
+    def add_tracked_item(self, path):
+        """Add a path to tracked items."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT OR REPLACE INTO tracked_items (path, active) VALUES (?, 1)',
+            (path,)
+        )
+        conn.commit()
+        conn.close()
+    
+    def deactivate_tracked_item(self, path):
+        """Deactivate a tracked item."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE tracked_items SET active = 0 WHERE path = ?',
+            (path,)
+        )
+        conn.commit()
+        conn.close()
+    
+    def remove_all_history(self, path):
+        """Remove all history for a path."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Remove from tracked items
+        cursor.execute('DELETE FROM tracked_items WHERE path = ?', (path,))
+        
+        # Remove file versions
+        cursor.execute('DELETE FROM file_versions WHERE path = ?', (path,))
+        
+        # Remove from snapshot files
+        cursor.execute('DELETE FROM snapshot_files WHERE path = ?', (path,))
+        
+        conn.commit()
+        conn.close()
+    
+    def is_tracked(self, path):
+        """Check if a path is actively tracked."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT 1 FROM tracked_items WHERE path = ? AND active = 1',
+            (path,)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    
+    def path_exists_in_history(self, path):
+        """Check if a path exists in any history."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT 1 FROM tracked_items WHERE path = ?',
+            (path,)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    
+    def get_tracked_items(self):
+        """Get all actively tracked items."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT path FROM tracked_items WHERE active = 1')
+        result = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return result
+    
+    def add_file_version(self, path, version, diff, content, timestamp):
+        """Add a file version."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO file_versions (path, version, diff, content, timestamp) VALUES (?, ?, ?, ?, ?)',
+            (path, version, diff, content, timestamp)
+        )
+        conn.commit()
+        conn.close()
+    
+    def get_latest_version(self, path):
+        """Get the latest version of a file."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT version, diff, content, timestamp FROM file_versions WHERE path = ? ORDER BY version DESC LIMIT 1',
+            (path,)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'version': result[0],
+                'diff': result[1],
+                'content': result[2],
+                'timestamp': result[3]
+            }
+        return None
+    
+    def get_file_version(self, path, version):
+        """Get a specific version of a file."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT version, diff, content, timestamp FROM file_versions WHERE path = ? AND version = ?',
+            (path, version)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'version': result[0],
+                'diff': result[1],
+                'content': result[2],
+                'timestamp': result[3]
+            }
+        return None
+    
+    def get_file_versions_up_to(self, path, version):
+        """Get all versions of a file up to a specific version."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT version, diff, content, timestamp FROM file_versions WHERE path = ? AND version <= ? ORDER BY version',
+            (path, version)
+        )
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'version': row[0],
+                'diff': row[1],
+                'content': row[2],
+                'timestamp': row[3]
+            }
+            for row in results
+        ]
+    
+    def is_file_tracked(self, path):
+        """Check if a path is a file (not directory) and is tracked."""
+        import os
+        return self.is_tracked(path) and os.path.isfile(path)
+    
+    def snapshot_exists(self, name):
+        """Check if a snapshot with the given name exists."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM snapshots WHERE name = ?', (name,))
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    
+    def create_snapshot(self, name, note, timestamp):
+        """Create a new snapshot."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO snapshots (name, note, timestamp) VALUES (?, ?, ?)',
+            (name, note, timestamp)
+        )
+        conn.commit()
+        conn.close()
+    
+    def add_snapshot_file(self, snapshot, path, version):
+        """Add a file to a snapshot."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO snapshot_files (snapshot, path, version) VALUES (?, ?, ?)',
+            (snapshot, path, version)
+        )
+        conn.commit()
+        conn.close()
+    
+    def get_all_snapshots(self):
+        """Get all snapshots."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT name, note, timestamp FROM snapshots ORDER BY timestamp DESC')
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'name': row[0],
+                'note': row[1],
+                'timestamp': row[2]
+            }
+            for row in results
+        ]
+    
+    def get_snapshot_files(self, name):
+        """Get all files in a snapshot."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT path, version FROM snapshot_files WHERE snapshot = ?',
+            (name,)
+        )
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'path': row[0],
+                'version': row[1]
+            }
+            for row in results
+        ]
+
+# File: storage/__init__.py
+"""Storage functionality for Chroni version control system."""
+
+# File: storage/files.py
+"""
+File storage and reading functionality.
+"""
+
+import os
+
+class FileStorage:
+    def read_file(self, path):
+        """Read a text file and return its content."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
+        
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # Try with different encoding
+            try:
+                with open(path, 'r', encoding='latin-1') as f:
+                    return f.read()
+            except Exception:
+                raise ValueError(f"Unable to read file as text: {path}")
+    
+    def write_file(self, path, content):
+        """Write content to a file."""
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    
+    def is_text_file(self, path):
+        """Check if a file is a text file."""
+        if not os.path.isfile(path):
+            return False
+        
+        try:
+            with open(path, 'rb') as f:
+                chunk = f.read(1024)
+                if b'\0' in chunk:
+                    return False
+            
+            # Try to read as text
+            with open(path, 'r', encoding='utf-8') as f:
+                f.read(1024)
+            return True
+        except (UnicodeDecodeError, PermissionError):
+            return False
+
+# File: storage/diffs.py
+"""
+Diff creation and application functionality.
+"""
+
+import difflib
+
+class DiffStorage:
+    def create_diff(self, old_content, new_content):
+        """Create a unified diff between two content strings."""
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        
+        diff = difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile='old',
+            tofile='new',
+            lineterm=''
+        )
+        
+        return ''.join(diff)
+    
+    def apply_diff(self, original_content, diff):
+        """Apply a unified diff to original content."""
+        original_lines = original_content.splitlines(keepends=True)
+        
+        # Parse the diff
+        patch = difflib.unified_diff.__doc__  # This is just to import the module
+        # We need to manually parse and apply the unified diff
+        
+        diff_lines = diff.splitlines()
+        new_lines = []
+        i = 0
+        original_idx = 0
+        
+        while i < len(diff_lines):
+            line = diff_lines[i]
+            
+            if line.startswith('@@'):
+                # Parse hunk header
+                parts = line.split()
+                if len(parts) >= 3:
+                    old_range = parts[1][1:]  # Remove the '-'
+                    if ',' in old_range:
+                        start, count = map(int, old_range.split(','))
+                    else:
+                        start, count = int(old_range), 1
+                    
+                    # Adjust for 0-based indexing
+                    original_idx = start - 1
+                
+            elif line.startswith(' '):
+                # Context line - copy from original
+                if original_idx < len(original_lines):
+                    new_lines.append(original_lines[original_idx])
+                    original_idx += 1
+                
+            elif line.startswith('-'):
+                # Deleted line - skip in original
+                original_idx += 1
+                
+            elif line.startswith('+'):
+                # Added line - add to new content
+                new_lines.append(line[1:] + '\n')
+            
+            i += 1
+        
+        # Add any remaining original lines
+        while original_idx < len(original_lines):
+            new_lines.append(original_lines[original_idx])
+            original_idx += 1
+        
+        return ''.join(new_lines)
+
+# File: utils/__init__.py
+"""Utility functions for Chroni version control system."""
+
+# File: utils/paths.py
+"""
+Path manipulation and resolution utilities.
+"""
+
+import os
+from storage.files import FileStorage
+
+def resolve_path(path):
+    """Resolve a path to absolute path."""
+    return os.path.abspath(os.path.expanduser(path))
+
+def get_db_path():
+    """Get the path to the database file."""
+    home_dir = os.path.expanduser('~')
+    vcdata_dir = os.path.join(home_dir, '.vcdata')
+    return os.path.join(vcdata_dir, 'chroni.db')
+
+def get_text_files_in_directory(directory):
+    """Get all text files in a directory recursively."""
+    file_storage = FileStorage()
+    text_files = []
+    
+    for root, dirs, files in os.walk(directory):
+        # Skip .vcdata directory
+        if '.vcdata' in dirs:
+            dirs.remove('.vcdata')
+        
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file_storage.is_text_file(file_path):
+                text_files.append(file_path)
+    
+    return text_files
+
+# File: utils/time.py
+"""
+Time and timestamp utilities.
+"""
+
+from datetime import datetime
+
+def get_timestamp():
+    """Get current timestamp as string."""
+    return datetime.now().isoformat()
+
+def format_timestamp(timestamp):
+    """Format timestamp for display."""
+    try:
+        dt = datetime.fromisoformat(timestamp)
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return timestamp
+
+# File: requirements.txt
+click>=8.0.0
+# sqlite3 is part of Python standard library
+# difflib is part of Python standard library
+# os is part of Python standard library
+# datetime is part of Python standard library
+
+# File: README.md
+# Chroni - Lightweight Version Control System
+
+Chroni is a standalone local version control system for tracking and snapshotting text files. It provides a simple CLI interface for managing file versions and creating snapshots.
+
+## Features
+
+- Track files and folders for version control
+- Automatic change detection and diff storage
+- Named snapshots of project state
+- File restoration to any previous version
+- SQLite-based storage in `~/.vcdata/chroni.db`
+
+## Installation
+
+1. Ensure you have Python 3.6+ installed
+2. Install dependencies: `pip install -r requirements.txt`
+3. Run from the chroni directory: `python -m chroni <command>`
+
+## Usage
+
+### Basic Commands
+
+```bash
+# Start tracking a file or folder
+python -m chroni track myfile.txt
+python -m chroni track src/
+
+# List tracked items
+python -m chroni list
+
+# Scan for changes and store them
+python -m chroni scan
+
+# Stop tracking (keeps history)
+python -m chroni untrack myfile.txt
+
+# Remove all history
+python -m chroni forget myfile.txt
+
+# Restore file to specific version
+python -m chroni restore myfile.txt --ver 2
+```
+
+### Snapshots
+
+```bash
+# Create a snapshot
+python -m chroni snapshot-create v1.0 --note "Initial release"
+
+# List snapshots
+python -m chroni snapshot-list
+
+# Restore to snapshot
+python -m chroni snapshot-restore v1.0
+```
+
+## How It Works
+
+1. **Tracking**: Files and folders are added to a tracking list
+2. **Scanning**: Changes are detected by comparing current content with stored versions
+3. **Diffs**: Only differences are stored using unified diff format
+4. **Snapshots**: Named points in time capturing all file versions
+5. **Restoration**: Files can be restored to any previous version or snapshot state
+
+## Storage
+
+- Database: `~/.vcdata/chroni.db` (SQLite)
+- Tracks file paths, versions, diffs, and snapshots
+- Efficient storage using differential compression
