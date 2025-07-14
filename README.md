@@ -41,6 +41,27 @@ python -m chroni forget myfile.txt
 python -m chroni restore myfile.txt --ver 2
 ```
 
+### File History and Navigation
+
+```bash
+# View full history of a file
+python -m chroni history myfile.txt
+
+# View history with limit
+python -m chroni history myfile.txt --limit 5
+
+# Show latest version of a file
+python -m chroni show myfile.txt
+
+# Show specific version
+python -m chroni show myfile.txt --ver 3
+
+# Restore file to version closest to a date
+python -m chroni restore-date myfile.txt "2024-01-15"
+python -m chroni restore-date myfile.txt "2024-01-15 14:30"
+python -m chroni restore-date myfile.txt "2024-01-15 14:30:45"
+```
+
 ### Snapshots
 
 ```bash

@@ -5,28 +5,28 @@ Chroni - A lightweight local version control system for tracking and snapshottin
 This is a multi-file Python application. To use it, create the following directory structure:
 
 chroni/
-├── __main__.py           # CLI entry point
-├── cli.py                # Click commands
-├── core/
-│   ├── __init__.py
-│   ├── tracker.py
-│   ├── scanner.py
-│   ├── restore.py
-│   ├── snapshot.py
-├── db/
-│   ├── __init__.py
-│   ├── schema.py
-│   ├── access.py
-├── storage/
-│   ├── __init__.py
-│   ├── files.py
-│   ├── diffs.py
-├── utils/
-│   ├── __init__.py
-│   ├── paths.py
-│   ├── time.py
-├── requirements.txt
-└── README.md
+\u251c\u2500\u2500 __main__.py           # CLI entry point
+\u251c\u2500\u2500 cli.py                # Click commands
+\u251c\u2500\u2500 core/
+\u2502   \u251c\u2500\u2500 __init__.py
+\u2502   \u251c\u2500\u2500 tracker.py
+\u2502   \u251c\u2500\u2500 scanner.py
+\u2502   \u251c\u2500\u2500 restore.py
+\u2502   \u251c\u2500\u2500 snapshot.py
+\u251c\u2500\u2500 db/
+\u2502   \u251c\u2500\u2500 __init__.py
+\u2502   \u251c\u2500\u2500 schema.py
+\u2502   \u251c\u2500\u2500 access.py
+\u251c\u2500\u2500 storage/
+\u2502   \u251c\u2500\u2500 __init__.py
+\u2502   \u251c\u2500\u2500 files.py
+\u2502   \u251c\u2500\u2500 diffs.py
+\u251c\u2500\u2500 utils/
+\u2502   \u251c\u2500\u2500 __init__.py
+\u2502   \u251c\u2500\u2500 paths.py
+\u2502   \u251c\u2500\u2500 time.py
+\u251c\u2500\u2500 requirements.txt
+\u2514\u2500\u2500 README.md
 """
 
 # File: __main__.py
@@ -192,6 +192,93 @@ def snapshot_restore(ctx, name):
         click.echo(f"Restored to snapshot: {name}")
     else:
         click.echo(f"Failed to restore snapshot: {name}")
+
+@cli.command('history')
+@click.argument('path')
+@click.option('--limit', type=int, help='Limit number of versions to show')
+@click.pass_context
+def history(ctx, path, limit):
+    """Show full history of a file."""
+    from core.history import HistoryViewer
+    
+    abs_path = resolve_path(path)
+    history_viewer = HistoryViewer()
+    
+    versions = history_viewer.get_file_history(abs_path, limit)
+    
+    if not versions:
+        click.echo(f"No history found for: {path}")
+        return
+    
+    click.echo(f"History for: {path}")
+    click.echo("=" * 50)
+    
+    for version in versions:
+        click.echo(f"Version {version['version']} - {version['formatted_timestamp']}")
+        if version['diff']:
+            click.echo("  Changes:")
+            for line in version['diff'].split('\n')[:5]:  # Show first 5 lines of diff
+                if line.strip():
+                    click.echo(f"    {line}")
+            if len(version['diff'].split('\n')) > 5:
+                click.echo("    ...")
+        click.echo()
+
+@cli.command('show')
+@click.argument('path')
+@click.option('--ver', type=int, help='Show specific version (default: latest)')
+@click.pass_context
+def show(ctx, path, ver):
+    """Show latest version or specific version of a file."""
+    from core.history import HistoryViewer
+    
+    abs_path = resolve_path(path)
+    history_viewer = HistoryViewer()
+    
+    if ver:
+        version_info = history_viewer.get_file_version_info(abs_path, ver)
+        if not version_info:
+            click.echo(f"Version {ver} not found for: {path}")
+            return
+        
+        click.echo(f"File: {path} (Version {ver})")
+        click.echo(f"Date: {version_info['formatted_timestamp']}")
+        click.echo("=" * 50)
+        click.echo(version_info['content'])
+    else:
+        # Show latest version
+        latest = history_viewer.get_latest_version_info(abs_path)
+        if not latest:
+            click.echo(f"No versions found for: {path}")
+            return
+        
+        click.echo(f"File: {path} (Latest - Version {latest['version']})")
+        click.echo(f"Date: {latest['formatted_timestamp']}")
+        click.echo("=" * 50)
+        click.echo(latest['content'])
+
+@cli.command('restore-date')
+@click.argument('path')
+@click.argument('date')
+@click.pass_context
+def restore_date(ctx, path, date):
+    """Restore a file to the version closest to a specific date."""
+    from core.history import HistoryViewer
+    
+    abs_path = resolve_path(path)
+    history_viewer = HistoryViewer()
+    restorer = ctx.obj['restorer']
+    
+    version = history_viewer.find_version_by_date(abs_path, date)
+    
+    if not version:
+        click.echo(f"No version found for date '{date}' for file: {path}")
+        return
+    
+    if restorer.restore_file(abs_path, version['version']):
+        click.echo(f"Restored {path} to version {version['version']} from {version['formatted_timestamp']}")
+    else:
+        click.echo(f"Failed to restore {path}")
 
 if __name__ == '__main__':
     cli()
@@ -438,7 +525,100 @@ class Restorer:
         
         return content
 
-# File: core/snapshot.py
+# File: core/history.py
+"""
+File history viewing and date-based navigation functionality.
+"""
+
+import os
+from datetime import datetime
+from db.access import DatabaseAccess
+from storage.files import FileStorage
+from utils.time import format_timestamp, parse_date
+
+class HistoryViewer:
+    def __init__(self):
+        self.db = DatabaseAccess()
+        self.file_storage = FileStorage()
+    
+    def get_file_history(self, file_path, limit=None):
+        """
+        Get full history of a file with formatted timestamps.
+        Returns list of version info dictionaries.
+        """
+        if not self.db.path_exists_in_history(file_path):
+            return []
+        
+        versions = self.db.get_all_file_versions(file_path, limit)
+        
+        # Add formatted timestamps
+        for version in versions:
+            version['formatted_timestamp'] = format_timestamp(version['timestamp'])
+        
+        return versions
+    
+    def get_file_version_info(self, file_path, version):
+        """
+        Get detailed info for a specific version of a file.
+        """
+        version_info = self.db.get_file_version(file_path, version)
+        
+        if not version_info:
+            return None
+        
+        # If this version doesn't have full content, reconstruct it
+        if not version_info['content']:
+            from core.restore import Restorer
+            restorer = Restorer()
+            version_info['content'] = restorer._reconstruct_content(file_path, version)
+        
+        version_info['formatted_timestamp'] = format_timestamp(version_info['timestamp'])
+        return version_info
+    
+    def get_latest_version_info(self, file_path):
+        """
+        Get info for the latest version of a file.
+        """
+        latest = self.db.get_latest_version(file_path)
+        
+        if not latest:
+            return None
+        
+        latest['formatted_timestamp'] = format_timestamp(latest['timestamp'])
+        return latest
+    
+    def find_version_by_date(self, file_path, date_str):
+        """
+        Find the version of a file closest to a specific date.
+        Date can be in formats: YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DD HH:MM:SS
+        """
+        target_date = parse_date(date_str)
+        
+        if not target_date:
+            return None
+        
+        versions = self.db.get_all_file_versions(file_path)
+        
+        if not versions:
+            return None
+        
+        # Find the version with timestamp closest to but not after the target date
+        best_version = None
+        best_diff = None
+        
+        for version in versions:
+            version_date = datetime.fromisoformat(version['timestamp'])
+            
+            if version_date <= target_date:
+                diff = abs((target_date - version_date).total_seconds())
+                if best_diff is None or diff < best_diff:
+                    best_diff = diff
+                    best_version = version
+        
+        if best_version:
+            best_version['formatted_timestamp'] = format_timestamp(best_version['timestamp'])
+        
+        return best_version
 """
 Snapshot management functionality.
 """
@@ -725,6 +905,32 @@ class DatabaseAccess:
             for row in results
         ]
     
+    def get_all_file_versions(self, path, limit=None):
+        """Get all versions of a file, optionally limited."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = 'SELECT version, diff, content, timestamp FROM file_versions WHERE path = ? ORDER BY version DESC'
+        params = [path]
+        
+        if limit:
+            query += ' LIMIT ?'
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'version': row[0],
+                'diff': row[1],
+                'content': row[2],
+                'timestamp': row[3]
+            }
+            for row in results
+        ]
+    
     def is_file_tracked(self, path):
         """Check if a path is a file (not directory) and is tracked."""
         import os
@@ -982,6 +1188,25 @@ def format_timestamp(timestamp):
     except ValueError:
         return timestamp
 
+def parse_date(date_str):
+    """
+    Parse date string in various formats and return datetime object.
+    Supports: YYYY-MM-DD, YYYY-MM-DD HH:MM, YYYY-MM-DD HH:MM:SS
+    """
+    formats = [
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+        '%Y-%m-%d'
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    return None
+
 # File: requirements.txt
 click>=8.0.0
 # sqlite3 is part of Python standard library
@@ -1031,6 +1256,27 @@ python -m chroni forget myfile.txt
 
 # Restore file to specific version
 python -m chroni restore myfile.txt --ver 2
+```
+
+### File History and Navigation
+
+```bash
+# View full history of a file
+python -m chroni history myfile.txt
+
+# View history with limit
+python -m chroni history myfile.txt --limit 5
+
+# Show latest version of a file
+python -m chroni show myfile.txt
+
+# Show specific version
+python -m chroni show myfile.txt --ver 3
+
+# Restore file to version closest to a date
+python -m chroni restore-date myfile.txt "2024-01-15"
+python -m chroni restore-date myfile.txt "2024-01-15 14:30"
+python -m chroni restore-date myfile.txt "2024-01-15 14:30:45"
 ```
 
 ### Snapshots

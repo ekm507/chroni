@@ -157,6 +157,32 @@ class DatabaseAccess:
             for row in results
         ]
     
+    def get_all_file_versions(self, path, limit=None):
+        """Get all versions of a file, optionally limited."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = 'SELECT version, diff, content, timestamp FROM file_versions WHERE path = ? ORDER BY version DESC'
+        params = [path]
+        
+        if limit:
+            query += ' LIMIT ?'
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'version': row[0],
+                'diff': row[1],
+                'content': row[2],
+                'timestamp': row[3]
+            }
+            for row in results
+        ]
+    
     def is_file_tracked(self, path):
         """Check if a path is a file (not directory) and is tracked."""
         import os
