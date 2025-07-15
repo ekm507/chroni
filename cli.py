@@ -242,9 +242,7 @@ def restore_date(ctx, path, date):
 def watch(ctx):
     """Watch tracked paths for changes and auto-scan."""
     from core import watcher
-    tracker = ctx.obj['tracker']
-    paths = tracker.list_tracked()
-    watcher.start_watching(paths)
+    watcher.start_watching()
     pass
 
 if __name__ == '__main__':
