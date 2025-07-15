@@ -62,6 +62,10 @@ def get_app_dir():
     config = load_config()
     return resolve_path(config['app_dir'])
 
+def get_tracked_paths_file():
+    app_dir = get_app_dir()
+    return os.path.join(app_dir, 'tracked_paths.json')
+
 def get_db_path():
     """Get the path to the database file from config."""
     config = load_config()
