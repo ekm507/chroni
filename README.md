@@ -8,7 +8,7 @@ Chroni is a standalone local version control system for tracking and snapshottin
 - Automatic change detection and diff storage
 - Named snapshots of project state
 - File restoration to any previous version
-- SQLite-based storage in `~/.vcdata/chroni.db`
+- SQLite-based storage in `~/.chroni/chroni.db`
 
 ## Installation
 
@@ -85,6 +85,6 @@ python -m chroni snapshot-restore v1.0
 
 ## Storage
 
-- Database: `~/.vcdata/chroni.db` (SQLite)
+- Database: `~/.chroni/chroni.db` (SQLite)
 - Tracks file paths, versions, diffs, and snapshots
 - Efficient storage using differential compression
