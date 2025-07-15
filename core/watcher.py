@@ -50,9 +50,34 @@ class TrackedPathsWatcher(FileSystemEventHandler):
         self._unschedule_all()
         self._init_tracked_paths()
 
+        # Re-schedule the tracked paths file watch
+        self.observer.schedule(self, path=str(self.tracked_file), recursive=False)
+
     def on_modified(self, event):
+        print('modified')
         if Path(event.src_path).resolve() == Path(self.tracked_file):
             self._reload_tracked_paths()
+        else:
+            self.main_handler.on_modified(event)
+
+    def on_created(self, event):
+        print('created')
+        if Path(event.src_path).resolve() == Path(self.tracked_file):
+            self._reload_tracked_paths()
+        else:
+            self.main_handler.on_created(event)
+
+    def on_deleted(self, event):
+        print('deleted')
+        if Path(event.src_path).resolve() != Path(self.tracked_file):
+            self.main_handler.on_deleted(event)
+
+    def on_moved(self, event):
+        print('moved')
+        if Path(event.src_path).resolve() == Path(self.tracked_file):
+            self._reload_tracked_paths()
+        else:
+            self.main_handler.on_moved(event)
 
 
 def start_watching():
