@@ -26,44 +26,58 @@ def cli(ctx):
     ctx.obj['snapshot_manager'] = SnapshotManager()
 
 @cli.command()
-@click.argument('path')
+@click.argument('paths', nargs=-1, required=True)
 @click.pass_context
-def track(ctx, path):
+def track(ctx, paths):
     """Start tracking file or folder."""
-    abs_path = resolve_path(path)
-    if not os.path.exists(abs_path):
-        click.echo(f"Error: Path '{path}' does not exist.")
-        return
+    for path in paths:
+        abs_path = resolve_path(path)
+        if not os.path.exists(abs_path):
+            click.echo(f"Error: Path '{path}' does not exist.")
+            return
 
-    tracker = ctx.obj['tracker']
-    if tracker.track_path(abs_path):
-        click.echo(f"Now tracking: {path}")
-    else:
-        click.echo(f"Already tracking: {path}")
+        tracker = ctx.obj['tracker']
+        if tracker.track_path(abs_path):
+            click.echo(f"Now tracking: {path}")
+        else:
+            click.echo(f"Already tracking: {path}")
 
 @cli.command()
-@click.argument('path')
+@click.argument('paths', nargs=-1, required=True)
 @click.pass_context
-def untrack(ctx, path):
+def untrack(ctx, paths):
     """Stop tracking, but keep history."""
-    abs_path = resolve_path(path)
-    tracker = ctx.obj['tracker']
-    if tracker.untrack_path(abs_path):
-        click.echo(f"Stopped tracking: {path}")
-    else:
-        click.echo(f"Not currently tracking: {path}")
+
+    for path in paths:
+        abs_path = resolve_path(path)
+        if not os.path.exists(abs_path):
+            click.echo(f"Error: Path '{path}' does not exist.")
+            return
+
+        tracker = ctx.obj['tracker']
+        if tracker.untrack_path(abs_path):
+            click.echo(f"Stopped tracking: {path}")
+        else:
+            click.echo(f"Not currently tracking: {path}")
+
 
 @cli.command()
-@click.argument('path')
+@click.argument('paths', nargs=-1, required=True)
 @click.pass_context
-def forget(ctx, path):
+def forget(ctx, paths):
     """Remove all history of path."""
-    abs_path = resolve_path(path)
-    tracker = ctx.obj['tracker']
-    if tracker.forget_path(abs_path):
-        click.echo(f"Removed all history for: {path}")
-    else:
-        click.echo(f"No history found for: {path}")
+    for path in paths:
+        abs_path = resolve_path(path)
+        if not os.path.exists(abs_path):
+            click.echo(f"Error: Path '{path}' does not exist.")
+            return
+
+        tracker = ctx.obj['tracker']
+        if tracker.forget_path(abs_path):
+            click.echo(f"Removed all history for: {path}")
+        else:
+            click.echo(f"No history found for: {path}")
+
 
 @cli.command()
 @click.pass_context
