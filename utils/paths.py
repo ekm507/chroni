@@ -64,7 +64,7 @@ def get_app_dir():
 
 def get_tracked_paths_file():
     app_dir = get_app_dir()
-    return os.path.join(app_dir, 'tracked_paths.json')
+    return os.path.join(app_dir, 'tracked_paths.txt')
 
 def get_db_path():
     """Get the path to the database file from config."""
